@@ -774,7 +774,7 @@ func (h *handler) cleanup(upgradeLog *harvesterv1.UpgradeLog) error {
 	// Cleanup the relationship from its corresponding Upgrade resource as more as possible, does not return on single error quickly
 	upgradeName := upgradeLog.Spec.UpgradeName
 	var err1, err2, err3 error
-	errorStr := fmt.Sprintf("upgradeLog %s/%s upgrade %s cleanup errors", upgradeLog.Namespace, upgradeLog.Name, upgradeName)
+	err := fmt.Errorf("upgradeLog %s/%s upgrade %s cleanup errors", upgradeLog.Namespace, upgradeLog.Name, upgradeName)
 
 	// when the upgrade object is deleted, it's DeletionTimestamp is set, and all ownering resources' DeletionTimestamp are also set
 	// but there is no promise that upgrade and other object disappear one by another
@@ -787,7 +787,7 @@ func (h *handler) cleanup(upgradeLog *harvesterv1.UpgradeLog) error {
 				err1 = nil
 				break
 			}
-			errorStr = fmt.Sprintf("%s failed to get upgrade %s", errorStr, err1.Error())
+			err = fmt.Errorf("%w failed to get upgrade %w", err, err1)
 			break
 		}
 		// already updated
@@ -802,7 +802,7 @@ func (h *handler) cleanup(upgradeLog *harvesterv1.UpgradeLog) error {
 				err2 = nil
 				break
 			}
-			errorStr = fmt.Sprintf("%s failed to update upgrade %s", errorStr, err2.Error())
+			err = fmt.Errorf("%w failed to update upgrade %w", err, err2)
 			break
 		}
 	}
@@ -811,13 +811,13 @@ func (h *handler) cleanup(upgradeLog *harvesterv1.UpgradeLog) error {
 	logrus.Info("Removing all other related resources")
 	err3 = h.stopCollect(upgradeLog)
 	if err3 != nil {
-		errorStr = fmt.Sprintf("%s failed to clean other resources %s", errorStr, err3.Error())
+		err = fmt.Errorf("%w failed to clean other resources %w", err, err3)
 	}
 
 	if err1 != nil || err2 != nil || err3 != nil {
 		// retry
-		logrus.Infof("Clean up upgradeLog related resources with error %s, retry", errorStr)
-		return fmt.Errorf("%s", errorStr)
+		logrus.Infof("%s, retry", err.Error())
+		return err
 	}
 
 	return nil
