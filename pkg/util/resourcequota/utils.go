@@ -10,6 +10,10 @@ import (
 	"github.com/harvester/harvester/pkg/util"
 )
 
+const (
+	additionalCompensationMemeory = 128 << 20 // additional 128Mi when compensate RQ
+)
+
 func HasMigratingVM(rq *corev1.ResourceQuota) bool {
 	if rq.Annotations == nil {
 		return false

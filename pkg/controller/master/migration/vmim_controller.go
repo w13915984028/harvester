@@ -7,7 +7,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
@@ -301,9 +300,11 @@ func (h *Handler) compensateResourceQuotaBase(vmim *kubevirtv1.VirtualMachineIns
 
 	rqToUpdate := rqs[0].DeepCopy()
 
-	// TODO: hard-coded for test
-	rl := map[corev1.ResourceName]resource.Quantity{
-		corev1.ResourceMemory: *resource.NewQuantity(1024*1024*1024*2, resource.BinarySI),
+	// only update to ResourceQuota annotation, do not change ResourceQuota spec directly in this step
+	needUpdate, rqToUpdate, rl := rqutils.CalculateCompensationResourceQuotaWithVMI(rqToUpdate, vmi, util.GetAdditionalGuestMemoryOverheadRatioWithoutError(h.settingCache))
+	if !needUpdate {
+		logrus.Debugf("compensateResourceQuotaBase: no need to update resource quota, skip updating namespace %s and vm %s", vmi.Namespace, vmi.Name)
+		return nil
 	}
 
 	// add compensation information to ResourceQuota

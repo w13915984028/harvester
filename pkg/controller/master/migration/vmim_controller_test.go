@@ -712,7 +712,7 @@ func TestHandler_OnVmimChanged_WithResourceQuota_WithCompensation(t *testing.T) 
 				ObjectMeta: v1.ObjectMeta{
 					Annotations: map[string]string{
 						util.GenerateAnnotationKeyMigratingVMUID(uid): fmt.Sprintf(vmResourceLimitStr, getMemWithOverhead(memory1Gi*2)),
-						util.AnnotationMigratingCompensation: "{\"memory\":\"2Gi\"}",
+						util.AnnotationMigratingCompensation: "{\"limits.memory\":\"555745096\"}",
 					},
 					Namespace: resourceQuotaNamespace,
 					Name:      resourceQuotaName,
