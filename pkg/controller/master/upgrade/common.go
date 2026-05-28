@@ -71,28 +71,106 @@ for manifest in $MANIFESTS; do
   esac
 done
 `
-	imageCleanupScript = `
-#!/usr/bin/env sh
-set -e
+
+// imageCleanupScript houses a best-effort shell automation workflow executed on
+// cluster hosts during system upgrades. It addresses critical disk reclamation
+// requirements by targeting specific version diffs and host-level dangling assets.
+//
+// CONCERNS & EDGE CASES HANDLED:
+// 1. Decoupled Registry Overrides: Upstream controllers track canonical image targets
+//    (e.g., "rancher/harvester-abc:v0.5.0"), but nodes might pull from private, air-gapped,
+//    or customized registries (e.g., "example.local/rancher/harvester-abc:v0.5.0").
+//    A strict string match would miss these, leaving stale data on disk.
+// 2. Orphaned "Ghost" Images: Leftover, untagged, or broken layers (<none>:<none>)
+//    frequently accumulate during layered cluster shifts and require active pruning.
+// 3. Controller Fault Tolerance: Variable injection from the controller can
+//    occasionally yield empty lists or whitespace-only arrays. The script must fail
+//    safely without crashing or creating evaluation syntax errors.
+// 4. "Try-Best" Over "Fail-Fast": If one image is locked by a terminating or stubborn
+//    pod, standard batch calls fail entirely. The workflow must gracefully skip locked
+//    assets and continue reclaiming space from the remaining targets.
+// 5. Environment Resiliency: On non-standard hosts where the runtime binary paths
+//    deviate or are unavailable, the automation logs a clear troubleshooting manual
+//    action notice instead of breaking the broader execution sequence.
+
+imageCleanupScript = `#!/usr/bin/env sh
 
 HOST_DIR="${HOST_DIR:-/host}"
-
 export CONTAINER_RUNTIME_ENDPOINT=unix:///$HOST_DIR/run/k3s/containerd/containerd.sock
 export CONTAINERD_ADDRESS=$HOST_DIR/run/k3s/containerd/containerd.sock
 
-CRICTL="$HOST_DIR/$(readlink $HOST_DIR/var/lib/rancher/rke2/bin)/crictl"
-if [ -z "$CRICTL" ];then
-	echo "Fail to get host crictl binary."
-	exit 0
-fi
+# Finds and returns the path to the valid crictl binary
+find_crictl() {
+    local bin_path="$HOST_DIR/var/lib/rancher/rke2/bin"
+    if [ -d "$bin_path" ]; then
+        echo "$HOST_DIR/$(readlink "$bin_path")/crictl"
+    else
+        which crictl 2>/dev/null || true
+    fi
+}
 
-ret=0
-"$CRICTL" rmi $IMAGES || ret=$?
+# Removes dangling <none>:<none> images from the host
+clean_ghost_images() {
+    local crictl="$1"
+    echo "Cleaning up dangling (<none>:<none>) images..."
 
-if [ "$ret" -ne 0 ]; then
-	echo "Fail to remove images"
-	exit 0
-fi
+    "$crictl" images --no-trunc | awk '$2 == "<none>" || $1 == "<none>" {print $3}' | while read -r img_id; do
+        if [ -n "$img_id" ]; then
+            echo "Attempting to remove ghost image ID: $img_id"
+            "$crictl" rmi "$img_id" >/dev/null || echo "Warning: Failed to remove ghost image $img_id"
+        fi
+    done
+}
+
+# Strips registries and diffs specific target images against current cluster images
+clean_stale_images_diff() {
+    local crictl="$1"
+    local images_list="$2"
+
+    # Trim whitespace to catch empty string or spaces-only inputs safely
+    local trimmed=$(echo "$images_list" | awk '{$1=$1;print}')
+    if [ -z "$trimmed" ]; then
+        echo "No target images provided in IMAGES environment variable. Diff cleanup skipped."
+        return 0
+    fi
+
+    local current_images=$("$crictl" images -q)
+
+    for target in $images_list; do
+        # Strip registry/path to get base name (e.g., 'example.local/rancher/harvester-abc:v0.5.0' -> 'harvester-abc:v0.5.0')
+        local target_base="${target##*/}"
+        if [ -z "$target_base" ]; then
+            continue
+        fi
+
+        for curr_img in $current_images; do
+            local curr_base="${curr_img##*/}"
+            if [ "$target_base" = "$curr_base" ]; then
+                if "$crictl" rmi "$curr_img" >/dev/null; then
+                    echo "Successfully removed image: $curr_img (Target: $target)"
+                else
+                    echo "Warning: Failed to remove matched image: $curr_img (Target: $target)"
+                fi
+            fi
+        done
+    done
+}
+
+main() {
+    local crictl
+    crictl=$(find_crictl)
+
+    if [ -z "$crictl" ] || [ ! -x "$crictl" ]; then
+        echo "Warning: Did not find crictl binary on the host. Skipping image cleanup. You will need to manually remove stale or ghost images to clean up disk space."
+        return 0
+    fi
+
+    # Execute cleanup steps cleanly
+    clean_ghost_images "$crictl"
+    clean_stale_images_diff "$crictl" "$IMAGES"
+}
+
+main
 `
 )
 
